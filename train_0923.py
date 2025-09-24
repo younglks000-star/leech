@@ -14,7 +14,7 @@ from torch import optim
 from torch.utils.data import DataLoader
 
 from data_provider.data_loader_emb_0922 import Dataset_Custom
-from models.TimeCMA_0923 import Dual
+from models.TimeCMA_0924v7 import Dual
 import utils.Metric_node as Metric
 
 import faulthandler
@@ -48,7 +48,7 @@ OVERRIDE = {
     "prompt_emb_base": r".\Prompt_Embeddings_llama360",
     "image_emb_base":  r"C:\Users\USER\Desktop\baseline\ICECMA\Image_Embeddings_cluster_768",
     # 여러 horizon
-    "output_lens": [1800],
+    "output_lens": [180, 360, 720, 1080, 1440, 1800],
 }
 
 BASE_DATE = dt.datetime(2013, 1, 1)  # 기준 날짜
