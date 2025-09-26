@@ -227,7 +227,7 @@ class LLMTimeCMA(nn.Module):
         
         Args:
             z: [B, N, C] - Cross-modal attention 후 특성
-            
+            ㄴㄴ
         Returns:
             predictions: [B, L_out, N] - 시계열 예측 결과
         """
