@@ -3,3 +3,9 @@ Prompt_Embeddings/
 Prompt_Embeddings_llama/
 Prompt_Embeddings_llama360/
 Image_Embeddings_cluster_768/
+STMA_node/TimeCMA_360/models/TimeCMA_360_9242317/region_1_pred_360.csv
+models/__pycache__/TimeCMA_0924.cpython-38.pyc
+*.pyc
+*.png
+*.npy
+*.csv

@@ -33,7 +33,7 @@ class Dual(nn.Module):
         head=8,
 
         # --- 추가 옵션 ---
-        use_time_feat=True,
+        use_time_feat=False,
         time_fourier_periods=(7.0, 30.4375, 91.3125, 365.25),  # 일/월/계절/연 주기(예시)
         p_drop_prompt=0.15,
         p_drop_image=0.15,
@@ -98,7 +98,7 @@ class Dual(nn.Module):
         # --- (C) Temporal Cross (Prompt) ---
         # 마지막 축 d_model = N
         self.cross = CrossModal(
-            d_model=self.num_nodes, n_heads=1, d_ff=self.d_ff, norm='LayerNorm',
+            d_model=self.num_nodes, n_heads=4, d_ff=self.d_ff, norm='LayerNorm',
             attn_dropout=self.dropout_n, dropout=self.dropout_n, pre_norm=True,
             activation="gelu", res_attention=True, n_layers=1, store_attn=False
         ).to(self.device)
@@ -113,7 +113,7 @@ class Dual(nn.Module):
         self.ln_img_kv = nn.LayerNorm(self.num_nodes).to(self.device)
 
         self.cross_spatial = CrossModal(
-            d_model=self.num_nodes, n_heads=1, d_ff=self.d_ff, norm='LayerNorm',
+            d_model=self.num_nodes, n_heads=4, d_ff=self.d_ff, norm='LayerNorm',
             attn_dropout=self.dropout_n, dropout=self.dropout_n, pre_norm=True,
             activation="gelu", res_attention=True, n_layers=1, store_attn=False
         ).to(self.device)

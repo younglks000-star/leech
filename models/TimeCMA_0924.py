@@ -8,7 +8,7 @@ import torch.nn.functional as F
 
 class Dual(nn.Module):
     """
-    TimeCMA 스타일의 2-단 크로스 모달 구조 (Temporal → Spatial).asdsad
+    TimeCMA 스타일의 2-단 크로스 모달 구조 (Temporal → Spatial)
 
     -------------
     1) RevIN으로 시계열 표준화 후, [B,N,L] → Linear → [B,N,C] 로 "노드별 임베딩"을 만든다.
