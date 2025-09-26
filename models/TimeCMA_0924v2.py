@@ -5,7 +5,7 @@ from einops import rearrange
 from layers.StandardNorm import Normalize
 from layers.Cross_Modal_Align import CrossModal
 
-
+#중요
 class Dual(nn.Module):
     """
     TimeCMA 스타일의 2-단 크로스 모달 구조 (Temporal → Spatial).
