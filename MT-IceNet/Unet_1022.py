@@ -1,6 +1,5 @@
 # baseline_unet.py
-# ✅ 베이스라인: 순수 CNN U-Net (시계열 처리 없음)
-# ✅ 30일 시계열 → 30개 채널로 변환
+# ✅ 베이스라인: 순수 CNN U-Net + Metric_node3 공간 시각화 연동
 
 import os, re, glob, warnings, sys
 import numpy as np
@@ -11,11 +10,11 @@ from datetime import datetime, timedelta
 from math import sqrt
 from sklearn.metrics import mean_squared_error, r2_score, mean_absolute_error
 
-# Metric_node import
+# ✅ Metric_node3 import (공간 시각화 포함)
 current_dir = os.path.dirname(os.path.abspath(__file__))
 utils_path = os.path.join(current_dir, "utils")
 sys.path.append(utils_path)
-import Metric_node as Metric
+import Metric_node3 as Metric  # ← 변경
 import torch
 
 from tensorflow.keras import Input, Model
@@ -27,17 +26,14 @@ from tensorflow.keras.optimizers import Adam
 warnings.filterwarnings("ignore")
 
 # =============================================================================
-# 설정
+# 설정 (기존과 동일)
 # =============================================================================
 DATA_ROOT     = r"C:\Users\USER\Desktop\ice\data\NSIDC_Data"
 FILE_REGEX    = r"N_(\d{8})_concentration.*\.tif$"
 IMG_SHAPE     = (448, 304)
 
-# 연속 예측 설정
 output_lens   = [7, 14, 21]
-
-# 단일 윈도우 설정 (채널로 변환)
-seq_input     = 30  # 30일 → 30 채널
+seq_input     = 30
 
 BATCH_SIZE    = 2
 Epoch         = 50
@@ -68,13 +64,12 @@ for g in tf.config.list_physical_devices('GPU'):
     except: 
         pass
 
-# 연도 분할
 TRAIN_YEARS = list(range(2013, 2020))
 VAL_YEARS   = [2020]
 TEST_YEARS  = [2021, 2022]
 
 # =============================================================================
-# 유틸/데이터
+# 유틸/데이터 (기존 코드 유지)
 # =============================================================================
 def list_tif_paths(root): 
     return sorted(glob.glob(os.path.join(root, "*", "*", "*.tif")))
@@ -87,7 +82,6 @@ def read_one_tif(path):
     return tiff.imread(path).astype(np.float32)
 
 def load_daily_stack(root, target_hw=IMG_SHAPE):
-    """데이터 로딩 및 전처리"""
     recs = []
     for p in list_tif_paths(root):
         d = parse_date(p)
@@ -118,13 +112,11 @@ def load_daily_stack(root, target_hw=IMG_SHAPE):
     return idx, X
 
 def make_land_mask(daily_stack):
-    """육지/바다 마스크 생성"""
     valid = np.isfinite(daily_stack)
     ocean = (valid.sum(axis=0) > 0).astype(np.float32)
     return ocean
 
 def build_index_splits(daily_idx, seq_input, max_lead, split_years, stride=1):
-    """인덱스 분할"""
     T = len(daily_idx)
     ii, yrs = [], []
     
@@ -142,22 +134,15 @@ def build_index_splits(daily_idx, seq_input, max_lead, split_years, stride=1):
     return tr, va, te
 
 def _maybe_downsample_2d(x, new_hw):
-    """2D 이미지 다운샘플링"""
-    x = tf.expand_dims(x, 0)  # [H, W] → [1, H, W]
-    x = tf.expand_dims(x, -1)  # [1, H, W] → [1, H, W, 1]
+    x = tf.expand_dims(x, 0)
+    x = tf.expand_dims(x, -1)
     x = tf.image.resize(x, new_hw, method='area')
-    x = tf.squeeze(x, [0, -1])  # [1, H, W, 1] → [H, W]
+    x = tf.squeeze(x, [0, -1])
     return x
 
 def make_unet_dataset(daily_stack, indices, seq_input, 
                       lead_days, batch_size=2, shuffle=False, 
                       seed=42, downsample=1):
-    """
-    ✅ U-Net용 Dataset: 시계열을 채널로 변환
-    
-    입력: [H, W, seq_input] - 30일 → 30채널
-    출력: [H, W, n_leads]
-    """
     daily_stack_clean = np.nan_to_num(daily_stack, nan=0.0)
     ds_x = tf.convert_to_tensor(daily_stack_clean, dtype=tf.float32)
     
@@ -173,7 +158,6 @@ def make_unet_dataset(daily_stack, indices, seq_input,
     
     @tf.function
     def _slice_unet(t):
-        # 입력: 시계열 → 채널
         x_frames = []
         for i in range(seq_input):
             frame = ds_x[t - seq_input + i]
@@ -181,10 +165,8 @@ def make_unet_dataset(daily_stack, indices, seq_input,
                 frame = _maybe_downsample_2d(frame, new_hw)
             x_frames.append(frame)
         
-        # [seq_input, H, W] → [H, W, seq_input] 전치
-        x = tf.stack(x_frames, axis=-1)  # [H, W, seq_input]
+        x = tf.stack(x_frames, axis=-1)
         
-        # 출력: 연속 예측
         y_frames = []
         for L in tf.unstack(lead_days_tf):
             frame = ds_x[t + L]
@@ -192,7 +174,7 @@ def make_unet_dataset(daily_stack, indices, seq_input,
                 frame = _maybe_downsample_2d(frame, new_hw)
             y_frames.append(frame)
         
-        ys = tf.stack(y_frames, axis=-1)  # [H, W, n_leads]
+        ys = tf.stack(y_frames, axis=-1)
         
         return x, ys
     
@@ -202,26 +184,14 @@ def make_unet_dataset(daily_stack, indices, seq_input,
     return ds
 
 # =============================================================================
-# 모델: 순수 CNN U-Net
+# 모델 (기존 코드 유지)
 # =============================================================================
 def build_unet_baseline(seq_input, H, W, n_out, 
                        land_mask=None,
                        lr=LEARNING_RATE):
-    """
-    ✅ 베이스라인: 순수 CNN U-Net
-    
-    특징:
-    - 시계열 처리 없음 (LSTM/ConvLSTM 제거)
-    - 30개 시점 = 30개 입력 채널
-    - 표준 U-Net 구조 (Encoder-Decoder + Skip Connections)
-    
-    입력: [H, W, seq_input]
-    출력: [H, W, n_out]
-    """
     input_layer = Input(shape=(H, W, seq_input), name='input')
     
-    # ===== Encoder =====
-    # Block 1
+    # Encoder
     c1 = Conv2D(32, 3, activation='relu', padding='same', 
                 kernel_initializer='he_normal')(input_layer)
     c1 = Conv2D(32, 3, activation='relu', padding='same', 
@@ -229,7 +199,6 @@ def build_unet_baseline(seq_input, H, W, n_out,
     c1 = BatchNormalization()(c1)
     p1 = MaxPooling2D(pool_size=(2, 2))(c1)
     
-    # Block 2
     c2 = Conv2D(64, 3, activation='relu', padding='same', 
                 kernel_initializer='he_normal')(p1)
     c2 = Conv2D(64, 3, activation='relu', padding='same', 
@@ -237,7 +206,6 @@ def build_unet_baseline(seq_input, H, W, n_out,
     c2 = BatchNormalization()(c2)
     p2 = MaxPooling2D(pool_size=(2, 2))(c2)
     
-    # Block 3
     c3 = Conv2D(128, 3, activation='relu', padding='same', 
                 kernel_initializer='he_normal')(p2)
     c3 = Conv2D(128, 3, activation='relu', padding='same', 
@@ -245,54 +213,48 @@ def build_unet_baseline(seq_input, H, W, n_out,
     c3 = BatchNormalization()(c3)
     p3 = MaxPooling2D(pool_size=(2, 2))(c3)
     
-    # Block 4 (Bottleneck)
     c4 = Conv2D(256, 3, activation='relu', padding='same', 
                 kernel_initializer='he_normal')(p3)
     c4 = Conv2D(256, 3, activation='relu', padding='same', 
                 kernel_initializer='he_normal')(c4)
     c4 = BatchNormalization()(c4)
-    c4 = Dropout(0.3)(c4)  # Regularization
+    c4 = Dropout(0.3)(c4)
     
-    # ===== Decoder =====
-    # Block 5
+    # Decoder
     u5 = UpSampling2D(size=(2, 2))(c4)
     u5 = Conv2D(128, 2, activation='relu', padding='same', 
                 kernel_initializer='he_normal')(u5)
-    m5 = concatenate([c3, u5], axis=3)  # Skip connection
+    m5 = concatenate([c3, u5], axis=3)
     c5 = Conv2D(128, 3, activation='relu', padding='same', 
                 kernel_initializer='he_normal')(m5)
     c5 = Conv2D(128, 3, activation='relu', padding='same', 
                 kernel_initializer='he_normal')(c5)
     c5 = BatchNormalization()(c5)
     
-    # Block 6
     u6 = UpSampling2D(size=(2, 2))(c5)
     u6 = Conv2D(64, 2, activation='relu', padding='same', 
                 kernel_initializer='he_normal')(u6)
-    m6 = concatenate([c2, u6], axis=3)  # Skip connection
+    m6 = concatenate([c2, u6], axis=3)
     c6 = Conv2D(64, 3, activation='relu', padding='same', 
                 kernel_initializer='he_normal')(m6)
     c6 = Conv2D(64, 3, activation='relu', padding='same', 
                 kernel_initializer='he_normal')(c6)
     c6 = BatchNormalization()(c6)
     
-    # Block 7
     u7 = UpSampling2D(size=(2, 2))(c6)
     u7 = Conv2D(32, 2, activation='relu', padding='same', 
                 kernel_initializer='he_normal')(u7)
-    m7 = concatenate([c1, u7], axis=3)  # Skip connection
+    m7 = concatenate([c1, u7], axis=3)
     c7 = Conv2D(32, 3, activation='relu', padding='same', 
                 kernel_initializer='he_normal')(m7)
     c7 = Conv2D(32, 3, activation='relu', padding='same', 
                 kernel_initializer='he_normal')(c7)
     
-    # Output
     raw_out = Conv2D(n_out, 1, activation='linear')(c7)
     out = Activation('linear', dtype='float32')(raw_out)
     
     model = Model(inputs=input_layer, outputs=out)
     
-    # Masked Loss
     if land_mask is not None:
         mask_4d = tf.constant(
             land_mask.reshape(1, H, W, 1), 
@@ -322,15 +284,18 @@ def build_unet_baseline(seq_input, H, W, n_out,
     return model
 
 # =============================================================================
-# 평가
+# ✅ 평가 함수 - 공간 시각화 추가
 # =============================================================================
 @torch.no_grad()
 def evaluate_for_metric_node(pred_maps, true_maps, lead_days, 
                              first_batch_index, seq_input, model_name, 
                              tag_time, land_mask):
-    """Metric_node를 사용한 평가"""
+    """
+    ✅ Metric_node3의 공간 시각화 함수 추가
+    """
     N, h, w, C = pred_maps.shape
     
+    # 1. 기존 시계열 평가
     pred = pred_maps.reshape(N, h*w, C).transpose(0, 2, 1)
     true = true_maps.reshape(N, h*w, C).transpose(0, 2, 1)
     
@@ -340,8 +305,44 @@ def evaluate_for_metric_node(pred_maps, true_maps, lead_days,
     n_features = h * w
     metric = Metric.metric(pred_t, true_t, n_features)
     
+    # 기존 시계열 플롯
     Metric.plot(pred_t, true_t, f"{model_name}_{C}", C, tag_time)
     
+    # 2. ✅ 새로운 공간 시각화 추가
+    print("\n[공간 시각화 생성 중...]")
+    
+    # 2-1. 예측 vs 실제 비교 (Day 1, 7, 14)
+    vis_days = [d for d in [1, 7, 14, 21] if d <= C]
+    Metric.plot_spatial_comparison(
+        pred_maps, true_maps, land_mask,
+        model_name=model_name,
+        seq_output=C,
+        now=tag_time,
+        lead_days=vis_days,
+        sample_idx=0
+    )
+    
+    # 2-2. 시간 진화 시각화
+    Metric.plot_spatial_temporal(
+        pred_maps, true_maps, land_mask,
+        model_name=model_name,
+        seq_output=C,
+        now=tag_time,
+        sample_idx=0,
+        n_timesteps=min(7, C)
+    )
+    
+    # 2-3. 오차 통계 시각화
+    Metric.plot_error_statistics(
+        pred_maps, true_maps, land_mask,
+        model_name=model_name,
+        seq_output=C,
+        now=tag_time
+    )
+    
+    print("[공간 시각화 완료]")
+    
+    # 3. CSV 저장 (기존)
     out_dir = f'./STMA_node/{model_name}/models/{model_name}_{C}_{tag_time.month}{tag_time.day}{tag_time.hour}{tag_time.minute}'
     os.makedirs(out_dir, exist_ok=True)
     
@@ -363,11 +364,11 @@ def evaluate_for_metric_node(pred_maps, true_maps, lead_days,
     return metric
 
 # =============================================================================
-# 메인
+# 메인 (기존 코드와 동일)
 # =============================================================================
 def main():
     print("="*70)
-    print("베이스라인: 순수 CNN U-Net (시계열 처리 없음)")
+    print("베이스라인: 순수 CNN U-Net + 공간 시각화")
     print("="*70)
     
     # 데이터 로드
@@ -379,7 +380,6 @@ def main():
     print(f"날짜 범위: {daily_idx[0]} ~ {daily_idx[-1]}")
     print(f"총 {len(daily_idx)}일 데이터")
     
-    # 데이터 통계
     nan_count = np.isnan(daily_stack).sum()
     total = daily_stack.size
     ocean_pixels = (land_mask == 1).sum()
@@ -400,19 +400,16 @@ def main():
         land_mask_d = land_mask
         H_eff, W_eff = H, W
     
-    # 실험 루프
     results = {}
     
     for seq_output in output_lens:
         print(f"\n{'='*70}")
-        print(f"실험: +{seq_output}일 연속 예측 (1일~{seq_output}일)")
-        print(f"입력: {seq_input}일 → {seq_input}채널")
+        print(f"실험: +{seq_output}일 연속 예측")
         print(f"{'='*70}")
         
         lead_days = list(range(1, seq_output + 1))
         max_lead = seq_output
         
-        # 인덱스 분할
         tr_idx, va_idx, te_idx = build_index_splits(
             daily_idx, seq_input, max_lead,
             (TRAIN_YEARS, VAL_YEARS, TEST_YEARS), 
@@ -421,7 +418,6 @@ def main():
         
         print(f"데이터: Train={len(tr_idx)}, Val={len(va_idx)}, Test={len(te_idx)}")
         
-        # 데이터셋 생성
         train_ds = make_unet_dataset(
             daily_stack, tr_idx, seq_input, tuple(lead_days),
             batch_size=BATCH_SIZE, shuffle=True, seed=SEED, downsample=DOWNSAMPLE
@@ -435,7 +431,6 @@ def main():
             batch_size=BATCH_SIZE, shuffle=False, downsample=DOWNSAMPLE
         )
         
-        # 모델 생성
         model = build_unet_baseline(
             seq_input, H_eff, W_eff, 
             n_out=seq_output,
@@ -445,16 +440,11 @@ def main():
         now = datetime.now()
         best = [1e5, 1e5, -1e5]
         
-        print(f"\n모델 구조:")
-        print(model.summary())
-        
-        # 학습 루프
         print(f"\n학습 시작...")
         for epoch in range(Epoch):
             history = model.fit(train_ds, validation_data=val_ds, 
                               epochs=1, verbose=2)
             
-            # 테스트 예측
             preds, trues = [], []
             for xb, yb in test_ds:
                 pb = model.predict(xb, verbose=0)
@@ -464,18 +454,17 @@ def main():
             pred = np.concatenate(preds, axis=0)
             true = np.concatenate(trues, axis=0)
             
-            # 0~1 → 0~100% 변환
             pred = np.clip(pred * 100.0, 0, 100) * land_mask_d[..., None]
             true = np.clip(true * 100.0, 0, 100) * land_mask_d[..., None]
             
-            # Metric 평가
             first_batch_index = int(te_idx[0]) if len(te_idx) else 0
+            
+            # ✅ 공간 시각화 포함된 평가 호출
             metric = evaluate_for_metric_node(
                 pred, true, lead_days, 
                 first_batch_index, seq_input, model_name, now, land_mask_d
             )
             
-            # Best 업데이트
             best = Metric.update(
                 now, save, model, best, metric, 
                 f"{model_name}_{seq_output}", seq_output, epoch
@@ -494,12 +483,11 @@ def main():
             'b_cor': best[2]
         }
     
-    # 최종 요약
     print("\n" + "="*70)
-    print("최종 결과 요약 - CNN U-Net Baseline")
+    print("최종 결과 요약")
     print("="*70)
     for k, v in results.items():
-        print(f"[+{k}일 연속] MSE={v['b_mse']:.6f} | MAE={v['b_mae']:.6f} | COR={v['b_cor']:.4f}")
+        print(f"[+{k}일] MSE={v['b_mse']:.6f} | MAE={v['b_mae']:.6f} | COR={v['b_cor']:.4f}")
     print("="*70)
 
 if __name__ == "__main__":
