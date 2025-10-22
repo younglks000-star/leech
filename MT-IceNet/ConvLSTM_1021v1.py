@@ -11,8 +11,8 @@ from math import sqrt
 from sklearn.metrics import mean_squared_error, r2_score, mean_absolute_error
 
 # Metric_node2 import (공간 시각화 포함)
-sys.path.append(r"C:\Users\USER\Desktop\baseline\MT-IceNet\utils")
-import Metric_node2 as Metric
+sys.path.append(r"C:\Users\USER\Desktop\baseline\leech\MT-IceNet\utils")
+import Metric_node3 as Metric
 import torch
 
 from tensorflow.keras import Input, Model
