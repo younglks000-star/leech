@@ -1,10 +1,6 @@
-"""
-해빙 예측 모델 모듈
-"""
+"""Collection of sea-ice forecasting models."""
 
-# 추후 다른 모델들 추가
-# from .cnn_2d import CNN2DForecaster
-# from .cnn_3d import CNN3DForecaster
-# from .timesformer import TimeSformer
-# from .swinlstm import SwinLSTM
+from .hyena_operator import Hyena2DForecaster, create_hyena2d_model
+
+__all__ = ["Hyena2DForecaster", "create_hyena2d_model"]
 
