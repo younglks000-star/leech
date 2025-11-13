@@ -79,8 +79,7 @@ def data_provider(args, split: str) -> Tuple[SeaIceDataset, DataLoader]:
     num_workers = args.num_workers
     
     # 선택 파라미터 (기본값 사용)
-    stride = getattr(args, 'stride', 1)
-    resize_hw = getattr(args, 'resize_hw', None)
+    stride = getattr(args, 'stride', 1)    
     cache_in_memory = getattr(args, 'cache_in_memory', False)
     verbose = getattr(args, 'verbose', False)
     train_years = getattr(args, 'train_years', (2013, 2020))
@@ -96,8 +95,7 @@ def data_provider(args, split: str) -> Tuple[SeaIceDataset, DataLoader]:
         train_years=train_years,
         val_years=val_years,
         test_years=test_years,
-        stride=stride,
-        resize_hw=resize_hw,
+        stride=stride,        
         cache_in_memory=cache_in_memory,
         verbose=verbose,
     )

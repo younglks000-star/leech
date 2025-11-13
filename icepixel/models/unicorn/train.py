@@ -1,4 +1,16 @@
-"""Training loop for the Hyena2DForecaster."""
+# -*- coding: utf-8 -*-
+"""
+Unicorn Forecaster 학습 스크립트
+
+iTransformer 스타일 학습 루프:
+    - Epoch마다 train → evaluate
+    - 평가지표 계산 (RMSE, MAE, R², SIE 등)
+    - Best 모델 저장
+    - 시각화 (공간 맵 + 시계열)
+
+사용법 (터미널):
+    python -m models.unicorn_cv.train
+"""
 
 import os
 import sys
@@ -13,14 +25,21 @@ import torch.nn.functional as F
 from torch import optim
 from torch.cuda.amp import autocast, GradScaler
 
+# ============================
+# Spyder / 스크립트 공통 경로 설정
+# ============================
+
 try:
+    # 일반 실행 (__file__ 존재)
     current_dir = os.path.dirname(os.path.abspath(__file__))
-    project_root = os.path.abspath(os.path.join(current_dir, "../.."))
+    project_root = os.path.abspath(os.path.join(current_dir, '../..'))
 except NameError:
+    # Spyder에서 실행 (__file__ 없음)
     current_dir = os.getcwd()
-    while not os.path.exists(os.path.join(current_dir, "data_provider")):
+    while not os.path.exists(os.path.join(current_dir, 'data_provider')):
         parent = os.path.dirname(current_dir)
         if parent == current_dir:
+            # 직접 지정
             project_root = r"C:\Users\USER\Desktop\baseline\leech\icepixel"
             break
         current_dir = parent
@@ -32,49 +51,64 @@ if project_root not in sys.path:
 
 print(f"Project root: {project_root}")
 
+# 공통 모듈 import
 from data_provider import data_provider
 from src import (
     calc_metrics,
+    update_best_metrics,
     plot_spatial_comparison,
     plot_timeseries,
     create_metric_table,
 )
-from models.hyena_operator.model import Hyena2DForecaster
+from models.unicorn.model import create_unicorn_model
 
 warnings.filterwarnings("ignore")
 
 
-def get_config() -> SimpleNamespace:
-    """Default experiment configuration."""
+# ============================
+# 설정
+# ============================
+
+def get_config():
+    """실험 설정"""
     config = SimpleNamespace(
+        # 데이터 설정
         root_path="C:/Users/USER/Desktop/ice/data/NSIDC_Data",
         train_years=(2013, 2020),
         val_years=(2021, 2021),
         test_years=(2022, 2022),
+
+        # 시퀀스 설정
         seq_input=30,
-        output_lens=[7, 14, 21],
-        model_name="Hyena2D",
-        n_layers=3,
-        hidden_dim=32,
-        temporal_dim=256,
-        hyena_order=2,
-        hyena_filter_order=64,
-        hyena_dropout=0.1,
-        hyena_filter_dropout=0.1,
+        output_lens=[7, 14, 21],   # 필요하면 [7,14,30,60,90]으로 변경 가능
+
+        # 모델 설정
+        model_name='Unicorn_CV',
         input_size=(448, 304),
+        de=25,          # DCMP kernel size (moving_avg)
+
+        # 학습 설정
         batch_size=2,
         num_workers=2,
         Epoch=30,
-        lr=1e-4,
+        lr=1e-5,
         use_amp=True,
-        device="cuda" if torch.cuda.is_available() else "cpu",
+
+        # 기타
+        device='cuda' if torch.cuda.is_available() else 'cpu',
         save_model=True,
         verbose=True,
         cache_in_memory=True,
+
+        # 시각화
         plot_interval=10,
     )
     return config
 
+
+# ============================
+# 학습 / 평가 함수
+# ============================
 
 def train_epoch(model, train_loader, optimizer, device, use_amp=False, scaler=None):
     model.train()
@@ -82,31 +116,30 @@ def train_epoch(model, train_loader, optimizer, device, use_amp=False, scaler=No
     num_batches = 0
 
     for batch in train_loader:
-        batch_x = batch["input"].to(device)
-        batch_y = batch["target"].to(device)
-        mask = batch["mask"].to(device=device, dtype=torch.bool)
+        batch_x = batch["input"].to(device)   # (B, T_in, 1, H, W)
+        batch_y = batch["target"].to(device)  # (B, T_out, 1, H, W)
+        mask = batch["mask"].to(device=device, dtype=torch.bool)  # (B, H, W)
 
         optimizer.zero_grad()
 
+        output = model(batch_x)  # (B, T_out, 1, H, W)
+
+        # 마스크 확장
+        mask_expanded = mask.unsqueeze(1).unsqueeze(1).expand_as(output)
+        valid_count = mask_expanded.sum().item()
+        if valid_count == 0:
+            continue
+
         if use_amp and scaler is not None:
             with autocast():
-                output = model(batch_x)
-                mask_expanded = mask.unsqueeze(1).unsqueeze(1).expand_as(output)
-                valid_count = mask_expanded.sum().item()
-                if valid_count == 0:
-                    continue
                 output_valid = output.masked_select(mask_expanded)
                 target_valid = batch_y.masked_select(mask_expanded)
                 loss = F.mse_loss(output_valid, target_valid)
+
             scaler.scale(loss).backward()
             scaler.step(optimizer)
             scaler.update()
         else:
-            output = model(batch_x)
-            mask_expanded = mask.unsqueeze(1).unsqueeze(1).expand_as(output)
-            valid_count = mask_expanded.sum().item()
-            if valid_count == 0:
-                continue
             output_valid = output.masked_select(mask_expanded)
             target_valid = batch_y.masked_select(mask_expanded)
             loss = F.mse_loss(output_valid, target_valid)
@@ -121,6 +154,7 @@ def train_epoch(model, train_loader, optimizer, device, use_amp=False, scaler=No
 
 
 def evaluate(model, test_loader, device):
+    """모델 평가 및 시각화용 샘플 반환"""
     model.eval()
 
     metrics_accum = defaultdict(float)
@@ -148,6 +182,7 @@ def evaluate(model, test_loader, device):
             batch_count += 1
 
             if sample is None:
+                # 마지막 예측 날짜 (간단히 dates_out 마지막 값)
                 dates_out = None
                 if "dates_out" in batch and batch["dates_out"]:
                     dates_out = batch["dates_out"][0][-1]
@@ -173,11 +208,15 @@ def evaluate(model, test_loader, device):
     return avg_metrics, sample
 
 
+# ============================
+# 메인 실험 루프
+# ============================
+
 def main():
     config = get_config()
 
     print("=" * 80)
-    print("Hyena 2D Forecaster Training")
+    print("Unicorn Forecaster Training")
     print("=" * 80)
     print(f"Model: {config.model_name}")
     print(f"Device: {config.device}")
@@ -191,10 +230,11 @@ def main():
     all_results = {}
 
     for seq_output in config.output_lens:
-        print(f"\n{'='*80}")
+        print(f"\n{'=' * 80}")
         print(f"Experiment: Input={config.seq_input} days → Output={seq_output} days")
-        print(f"{'='*80}\n")
+        print(f"{'=' * 80}\n")
 
+        # 1) 데이터로더
         print("[1] Creating Dataloaders...")
         args = SimpleNamespace(
             root_path=config.root_path,
@@ -213,24 +253,17 @@ def main():
         test_dataset, test_loader = data_provider(args, split="test")
 
         print(f"  Train samples: {len(train_dataset)}")
-        print(f"  Test samples: {len(test_dataset)}")
+        print(f"  Test samples:  {len(test_dataset)}")
 
+        # 2) 모델 생성
         print("\n[2] Creating Model...")
-        # [2] Creating Model...
-        model = Hyena2DForecaster(
+        model = create_unicorn_model(
             input_size=config.input_size,
-            in_time_points=config.seq_input,      
-            out_time_points=seq_output,           
-            n_layers=config.n_layers,
-            hidden_dim=config.hidden_dim,
-            temporal_dim=config.temporal_dim,
-            hyena_order=config.hyena_order,
-            hyena_filter_order=config.hyena_filter_order,
-            hyena_dropout=config.hyena_dropout,
-            hyena_filter_dropout=config.hyena_filter_dropout,
+            seq_input=config.seq_input,
+            seq_output=seq_output,
+            de=config.de,
+            device=config.device,
         )
-        model = model.to(config.device)         
-        
 
         optimizer = optim.Adam(model.parameters(), lr=config.lr)
 
@@ -253,6 +286,7 @@ def main():
         print(f"\n[3] Training for {config.Epoch} epochs...")
         print(f"  Results will be saved to: {save_dir}")
 
+        # 3) Epoch loop
         for epoch in range(config.Epoch):
             train_loss = train_epoch(
                 model,
@@ -279,11 +313,11 @@ def main():
             best_rmse_display = best_metrics["RMSE"] if best_metrics else float("inf")
             best_mae_display = best_metrics["MAE"] if best_metrics else float("inf")
             best_r2_display = best_metrics["R2"] if best_metrics else -float("inf")
-
             print(f"  RMSE: {metrics['RMSE']:.6f}  |  Best: {best_rmse_display:.6f}")
             print(f"  MAE:  {metrics['MAE']:.6f}  |  Best: {best_mae_display:.6f}")
             print(f"  R²:   {metrics['R2']:.6f}  |  Best: {best_r2_display:.6f}")
 
+            # 주기적 시각화
             if sample and (epoch % config.plot_interval == 0 or epoch == config.Epoch - 1):
                 print("  Saving visualizations...")
 
@@ -291,7 +325,9 @@ def main():
                     sample["pred"][-1, 0],
                     sample["true"][-1, 0],
                     date=sample.get("date") or test_dataset.file_list[0][0],
-                    save_path=os.path.join(save_dir, "plots", f"epoch_{epoch:03d}_spatial.png"),
+                    save_path=os.path.join(
+                        save_dir, "plots", f"epoch_{epoch:03d}_spatial.png"
+                    ),
                 )
 
                 plot_timeseries(
@@ -300,23 +336,25 @@ def main():
                     model_name=config.model_name,
                     seq_output=seq_output,
                     mask=sample["mask"],
-                    save_path=os.path.join(save_dir, "plots", f"epoch_{epoch:03d}_timeseries.png"),
+                    save_path=os.path.join(
+                        save_dir, "plots", f"epoch_{epoch:03d}_timeseries.png"
+                    ),
                 )
 
-        print(f"\n{'='*60}")
+        print(f"\n{'=' * 60}")
         print("Training Complete!")
-        print(f"{'='*60}")
+        print(f"{'=' * 60}")
         if best_metrics:
             print(f"Best Epoch: {best_metrics.get('best_epoch', 'N/A')}")
             print(f"Best RMSE: {best_metrics['RMSE']:.6f}")
-            print(f"Best MAE: {best_metrics['MAE']:.6f}")
-            print(f"Best R²: {best_metrics['R2']:.6f}")
+            print(f"Best MAE:  {best_metrics['MAE']:.6f}")
+            print(f"Best R²:   {best_metrics['R2']:.6f}")
         else:
             print("Best metrics not computed (no evaluation batches).")
-        print(f"{'='*60}\n")
+        print(f"{'=' * 60}\n")
 
         if best_metrics:
-            create_metric_table(
+            df = create_metric_table(
                 best_metrics,
                 save_path=os.path.join(save_dir, "best_metrics.csv"),
             )
@@ -324,10 +362,13 @@ def main():
 
         all_results[seq_output] = best_metrics if best_metrics else {}
 
+        # 메모리 정리
         del model, optimizer, train_loader, test_loader
         gc.collect()
-        torch.cuda.empty_cache()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
+    # 전체 요약
     print("\n" + "=" * 80)
     print("Final Summary - All Experiments")
     print("=" * 80)

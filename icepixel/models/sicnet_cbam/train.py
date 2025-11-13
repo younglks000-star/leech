@@ -1,4 +1,10 @@
-"""Training loop for the Hyena2DForecaster."""
+# -*- coding: utf-8 -*-
+"""
+SICNet-CBAM Forecaster 학습 스크립트
+
+사용법:
+    python -m models.sicnet_cbam_cv.train
+"""
 
 import os
 import sys
@@ -13,6 +19,7 @@ import torch.nn.functional as F
 from torch import optim
 from torch.cuda.amp import autocast, GradScaler
 
+# 프로젝트 루트 탐색 (Spyder 대응)
 try:
     current_dir = os.path.dirname(os.path.abspath(__file__))
     project_root = os.path.abspath(os.path.join(current_dir, "../.."))
@@ -39,44 +46,44 @@ from src import (
     plot_timeseries,
     create_metric_table,
 )
-from models.hyena_operator.model import Hyena2DForecaster
+from models.sicnet_cbam.model import create_sicnet_cbam_model
 
 warnings.filterwarnings("ignore")
 
 
-def get_config() -> SimpleNamespace:
-    """Default experiment configuration."""
+def get_config():
+    """실험 설정"""
     config = SimpleNamespace(
+        # 데이터
         root_path="C:/Users/USER/Desktop/ice/data/NSIDC_Data",
         train_years=(2013, 2020),
         val_years=(2021, 2021),
         test_years=(2022, 2022),
+        # 시퀀스
         seq_input=30,
         output_lens=[7, 14, 21],
-        model_name="Hyena2D",
-        n_layers=3,
-        hidden_dim=32,
-        temporal_dim=256,
-        hyena_order=2,
-        hyena_filter_order=64,
-        hyena_dropout=0.1,
-        hyena_filter_dropout=0.1,
+        # 모델
+        model_name="SICNet_CBAM_CV",
         input_size=(448, 304),
+        # 학습
         batch_size=2,
         num_workers=2,
         Epoch=30,
         lr=1e-4,
         use_amp=True,
+        # 기타
         device="cuda" if torch.cuda.is_available() else "cpu",
         save_model=True,
         verbose=True,
         cache_in_memory=True,
+        # 시각화
         plot_interval=10,
     )
     return config
 
 
 def train_epoch(model, train_loader, optimizer, device, use_amp=False, scaler=None):
+
     model.train()
     total_loss = 0.0
     num_batches = 0
@@ -88,13 +95,14 @@ def train_epoch(model, train_loader, optimizer, device, use_amp=False, scaler=No
 
         optimizer.zero_grad()
 
+        output = model(batch_x)
+        mask_expanded = mask.unsqueeze(1).unsqueeze(1).expand_as(output)
+        valid_count = mask_expanded.sum().item()
+        if valid_count == 0:
+            continue
+
         if use_amp and scaler is not None:
             with autocast():
-                output = model(batch_x)
-                mask_expanded = mask.unsqueeze(1).unsqueeze(1).expand_as(output)
-                valid_count = mask_expanded.sum().item()
-                if valid_count == 0:
-                    continue
                 output_valid = output.masked_select(mask_expanded)
                 target_valid = batch_y.masked_select(mask_expanded)
                 loss = F.mse_loss(output_valid, target_valid)
@@ -102,11 +110,6 @@ def train_epoch(model, train_loader, optimizer, device, use_amp=False, scaler=No
             scaler.step(optimizer)
             scaler.update()
         else:
-            output = model(batch_x)
-            mask_expanded = mask.unsqueeze(1).unsqueeze(1).expand_as(output)
-            valid_count = mask_expanded.sum().item()
-            if valid_count == 0:
-                continue
             output_valid = output.masked_select(mask_expanded)
             target_valid = batch_y.masked_select(mask_expanded)
             loss = F.mse_loss(output_valid, target_valid)
@@ -122,7 +125,6 @@ def train_epoch(model, train_loader, optimizer, device, use_amp=False, scaler=No
 
 def evaluate(model, test_loader, device):
     model.eval()
-
     metrics_accum = defaultdict(float)
     batch_count = 0
     sample = None
@@ -143,8 +145,8 @@ def evaluate(model, test_loader, device):
                 pixel_area_km2=625.0,
             )
 
-            for key, value in batch_metrics.items():
-                metrics_accum[key] += float(value)
+            for k, v in batch_metrics.items():
+                metrics_accum[k] += float(v)
             batch_count += 1
 
             if sample is None:
@@ -168,7 +170,7 @@ def evaluate(model, test_loader, device):
             "SIE_error_pct": 0.0,
         }
     else:
-        avg_metrics = {key: metrics_accum[key] / batch_count for key in metrics_accum}
+        avg_metrics = {k: metrics_accum[k] / batch_count for k in metrics_accum}
 
     return avg_metrics, sample
 
@@ -177,7 +179,7 @@ def main():
     config = get_config()
 
     print("=" * 80)
-    print("Hyena 2D Forecaster Training")
+    print("SICNet-CBAM Forecaster Training")
     print("=" * 80)
     print(f"Model: {config.model_name}")
     print(f"Device: {config.device}")
@@ -191,9 +193,9 @@ def main():
     all_results = {}
 
     for seq_output in config.output_lens:
-        print(f"\n{'='*80}")
+        print(f"\n{'=' * 80}")
         print(f"Experiment: Input={config.seq_input} days → Output={seq_output} days")
-        print(f"{'='*80}\n")
+        print(f"{'=' * 80}\n")
 
         print("[1] Creating Dataloaders...")
         args = SimpleNamespace(
@@ -208,7 +210,6 @@ def main():
             verbose=config.verbose,
             cache_in_memory=config.cache_in_memory,
         )
-
         train_dataset, train_loader = data_provider(args, split="train")
         test_dataset, test_loader = data_provider(args, split="test")
 
@@ -216,21 +217,12 @@ def main():
         print(f"  Test samples: {len(test_dataset)}")
 
         print("\n[2] Creating Model...")
-        # [2] Creating Model...
-        model = Hyena2DForecaster(
+        model = create_sicnet_cbam_model(
             input_size=config.input_size,
-            in_time_points=config.seq_input,      
-            out_time_points=seq_output,           
-            n_layers=config.n_layers,
-            hidden_dim=config.hidden_dim,
-            temporal_dim=config.temporal_dim,
-            hyena_order=config.hyena_order,
-            hyena_filter_order=config.hyena_filter_order,
-            hyena_dropout=config.hyena_dropout,
-            hyena_filter_dropout=config.hyena_filter_dropout,
+            seq_input=config.seq_input,
+            seq_output=seq_output,
+            device=config.device,
         )
-        model = model.to(config.device)         
-        
 
         optimizer = optim.Adam(model.parameters(), lr=config.lr)
 
@@ -276,36 +268,37 @@ def main():
 
             print(f"\n[Epoch {epoch+1}/{config.Epoch}]")
             print(f"  Train Loss: {train_loss:.6f}")
-            best_rmse_display = best_metrics["RMSE"] if best_metrics else float("inf")
-            best_mae_display = best_metrics["MAE"] if best_metrics else float("inf")
-            best_r2_display = best_metrics["R2"] if best_metrics else -float("inf")
-
-            print(f"  RMSE: {metrics['RMSE']:.6f}  |  Best: {best_rmse_display:.6f}")
-            print(f"  MAE:  {metrics['MAE']:.6f}  |  Best: {best_mae_display:.6f}")
-            print(f"  R²:   {metrics['R2']:.6f}  |  Best: {best_r2_display:.6f}")
+            best_rmse_disp = best_metrics["RMSE"] if best_metrics else float("inf")
+            best_mae_disp = best_metrics["MAE"] if best_metrics else float("inf")
+            best_r2_disp = best_metrics["R2"] if best_metrics else -float("inf")
+            print(f"  RMSE: {metrics['RMSE']:.6f}  |  Best: {best_rmse_disp:.6f}")
+            print(f"  MAE:  {metrics['MAE']:.6f}  |  Best: {best_mae_disp:.6f}")
+            print(f"  R²:   {metrics['R2']:.6f}  |  Best: {best_r2_disp:.6f}")
 
             if sample and (epoch % config.plot_interval == 0 or epoch == config.Epoch - 1):
                 print("  Saving visualizations...")
-
                 plot_spatial_comparison(
                     sample["pred"][-1, 0],
                     sample["true"][-1, 0],
                     date=sample.get("date") or test_dataset.file_list[0][0],
-                    save_path=os.path.join(save_dir, "plots", f"epoch_{epoch:03d}_spatial.png"),
+                    save_path=os.path.join(
+                        save_dir, "plots", f"epoch_{epoch:03d}_spatial.png"
+                    ),
                 )
-
                 plot_timeseries(
                     sample["pred"][:, 0],
                     sample["true"][:, 0],
                     model_name=config.model_name,
                     seq_output=seq_output,
                     mask=sample["mask"],
-                    save_path=os.path.join(save_dir, "plots", f"epoch_{epoch:03d}_timeseries.png"),
+                    save_path=os.path.join(
+                        save_dir, "plots", f"epoch_{epoch:03d}_timeseries.png"
+                    ),
                 )
 
-        print(f"\n{'='*60}")
+        print(f"\n{'=' * 60}")
         print("Training Complete!")
-        print(f"{'='*60}")
+        print(f"{'=' * 60}")
         if best_metrics:
             print(f"Best Epoch: {best_metrics.get('best_epoch', 'N/A')}")
             print(f"Best RMSE: {best_metrics['RMSE']:.6f}")
@@ -313,7 +306,7 @@ def main():
             print(f"Best R²: {best_metrics['R2']:.6f}")
         else:
             print("Best metrics not computed (no evaluation batches).")
-        print(f"{'='*60}\n")
+        print(f"{'=' * 60}\n")
 
         if best_metrics:
             create_metric_table(

@@ -88,10 +88,10 @@ def get_config():
         input_size=(448, 304),  
         
         # 학습 설정
-        batch_size=1, 
+        batch_size=2, 
         num_workers=2,
         Epoch=30,
-        lr=0.001,
+        lr=1e-5,
         use_amp=True,
         
         # 기타
